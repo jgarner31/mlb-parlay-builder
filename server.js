@@ -121,7 +121,11 @@ async function fetchOddsData() {
       const url = `https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/?apiKey=${ODDS_API_KEY}&regions=us&markets=totals&oddsFormat=american`;
       const res = await fetch(url);
       const games = await res.json();
-      return games || [];
+      if (!Array.isArray(games)) {
+        console.log('Odds API returned non-array:', JSON.stringify(games).slice(0, 200));
+        return [];
+      }
+      return games;
     } catch (e) {
       console.error('Odds API error:', e.message);
       return [];
