@@ -274,122 +274,103 @@ async function fetchUmpireData() {
   });
 }
 
-// 5. VSIN — Ballpark Pal strikeout projections (Pro cookie required)
-// Strategy: try direct JSON endpoint first, fall back to HTML scrape
+// 5. BallparkPal strikeout projections (free public API — powers VSIN strikeout page)
 async function fetchVSINStrikeouts() {
-  if (!VSIN_COOKIE) return {};
-
   return cachedFetch('vsin_k', async () => {
-    const headers = {
-      'Cookie': VSIN_COOKIE,
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-      'Accept': 'application/json, text/html, */*',
-      'Referer': 'https://vsin.com/projections-strikeouts/'
-    };
-
-    // Try JSON endpoints first (faster, cleaner)
-    const apiAttempts = [
-      'https://vsin.com/wp-json/vsin/v1/strikeout-projections',
-      'https://vsin.com/wp-json/vsin/v1/mlb/strikeouts',
-      'https://api.vsin.com/mlb/strikeout-projections'
-    ];
-
-    for (const apiUrl of apiAttempts) {
-      try {
-        const res = await fetch(apiUrl, { headers });
-        if (res.ok) {
-          const data = await res.json();
-          if (data && (Array.isArray(data) || data.projections)) {
-            console.log('VSIN: Got JSON from', apiUrl);
-            return parseVSINStrikeoutJSON(data);
-          }
-        }
-      } catch (e) { /* try next endpoint */ }
-    }
-
-    // Fall back: scrape the rendered HTML page
     try {
-      const res = await fetch('https://vsin.com/projections-strikeouts/', { headers });
-      const html = await res.text();
-      return parseVSINStrikeoutHTML(html);
+      const res = await fetch('https://www.ballparkpal.com/StrikeoutPropsGet.php', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+          'Accept': 'application/json'
+        }
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      const map = {};
+      for (const item of data) {
+        const name = (item.playerName || '').toLowerCase().trim();
+        if (!name) continue;
+
+        const projection = parseFloat(item.Projection) || 0;
+        const projLine   = parseFloat(item.BetLine)    || 0;
+        const probability = parseFloat(item.Probability) || 0;
+
+        // Convert market odds string (e.g. "+115", "-130") to implied probability
+        const oddsStr = (item.Odds || '').trim();
+        let marketProb = 0.5;
+        if (oddsStr) {
+          const odds = parseInt(oddsStr, 10);
+          marketProb = odds > 0
+            ? 100 / (odds + 100) / 100
+            : Math.abs(odds) / (Math.abs(odds) + 100) / 100;
+        }
+
+        // Value % = edge our model has over market in probability terms
+        const valuePct = probability > 0 ? (probability - marketProb) * 100 : 0;
+
+        map[name] = { projection, projLine, probability, valuePct };
+      }
+      console.log(`BallparkPal K: loaded ${Object.keys(map).length} pitchers`);
+      return map;
     } catch (e) {
-      console.log('VSIN strikeouts unavailable');
+      console.log('BallparkPal strikeouts unavailable:', e.message);
       return {};
     }
   });
 }
 
-function parseVSINStrikeoutJSON(data) {
-  const map = {};
-  const list = Array.isArray(data) ? data : (data.projections || []);
-  list.forEach(item => {
-    if (item.pitcher || item.name) {
-      const name = (item.pitcher || item.name || '').toLowerCase().trim();
-      map[name] = {
-        projLine: parseFloat(item.proj_line || item.projected_line || 0),
-        projection: parseFloat(item.projection || item.projected || 0),
-        valuePct: parseFloat(item.value_pct || item.value || 0),
-        consensusLine: parseFloat(item.cons_line || item.consensus_line || 0)
-      };
-    }
-  });
-  return map;
-}
-
-function parseVSINStrikeoutHTML(html) {
-  const $ = cheerio.load(html);
-  const map = {};
-  $('table tbody tr, [class*="projection-row"], [class*="striker-row"]').each((i, row) => {
-    const cells = $(row).find('td, [class*="cell"]');
-    if (cells.length >= 4) {
-      const name = $(cells[0]).text().trim().toLowerCase();
-      const projLine = parseFloat($(cells[1]).text()) || 0;
-      const projection = parseFloat($(cells[2]).text()) || 0;
-      const valuePct = parseFloat($(cells[cells.length - 1]).text().replace('%','')) || 0;
-      if (name && projection > 0) {
-        map[name] = { projLine, projection, valuePct, consensusLine: projLine };
-      }
-    }
-  });
-  return map;
-}
-
-// VSIN YRFI (Yes Run First Inning) model — we invert to NRFI probability
+// BallparkPal YRFI — server-rendered HTML, free, no auth required
+// Maps team abbreviation (lowercase, BPP format) → { modelProb, nrfiProb }
 async function fetchVSINYRFI() {
-  if (!VSIN_COOKIE) return {};
-
   return cachedFetch('vsin_yrfi', async () => {
-    const headers = {
-      'Cookie': VSIN_COOKIE,
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-      'Accept': 'application/json, text/html, */*',
-      'Referer': 'https://vsin.com/mlb/yrfi-report/'
-    };
-
     try {
-      const res = await fetch('https://vsin.com/mlb/yrfi-report/', { headers });
+      const res = await fetch('https://www.ballparkpal.com/First-Inning.php', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        }
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const html = await res.text();
       const $ = cheerio.load(html);
       const map = {};
 
-      $('table tbody tr, [class*="game-row"], [class*="yrfi-row"]').each((i, row) => {
-        const cells = $(row).find('td');
-        if (cells.length >= 3) {
-          const matchup = $(cells[0]).text().trim();
-          const modelProb = parseFloat($(cells[1]).text().replace('%','').replace('-','')) || 0;
-          const marketLine = $(cells[2]).text().trim();
-          if (matchup) {
-            map[matchup] = { modelProb, marketLine };
-          }
-        }
+      $('tr').each((i, row) => {
+        const teamCell = $(row).find('td[data-column="teams"]');
+        const yrfiCell = $(row).find('td[data-column="yrfi"]');
+        if (!teamCell.length || !yrfiCell.length) return;
+
+        // Team abbrs come from img src, e.g. "Images/chw-logo.svg" → "chw"
+        const imgs = teamCell.find('img');
+        if (imgs.length < 2) return;
+        const awayAbbr = $(imgs[0]).attr('src')?.match(/\/([a-z]+)-logo\.svg/i)?.[1]?.toLowerCase();
+        const homeAbbr = $(imgs[1]).attr('src')?.match(/\/([a-z]+)-logo\.svg/i)?.[1]?.toLowerCase();
+
+        const yrfiPct = parseFloat(yrfiCell.text()) || 0;
+        if (!awayAbbr || !homeAbbr || !yrfiPct) return;
+
+        const entry = { modelProb: yrfiPct, nrfiProb: 100 - yrfiPct };
+        map[awayAbbr] = entry;
+        map[homeAbbr] = entry;
       });
+
+      console.log(`BallparkPal YRFI: loaded ${Object.keys(map).length} team entries`);
       return map;
     } catch (e) {
-      console.log('VSIN YRFI unavailable');
+      console.log('BallparkPal YRFI unavailable:', e.message);
       return {};
     }
   });
 }
+
+// BallparkPal uses short lowercase abbrs; MLB Stats API uses uppercase (sometimes different).
+// This map handles the mismatches; everything else just needs .toLowerCase().
+const MLB_TO_BPP = {
+  'CWS': 'chw', 'WSH': 'was', 'WAS': 'was', 'ATH': 'oak',
+  'NYY': 'nyy', 'NYM': 'nym', 'LAD': 'lad', 'LAA': 'laa',
+  'TBR': 'tb',  'TB':  'tb',  'SDP': 'sd',  'SFG': 'sf',
+  'KCR': 'kc',  'KC':  'kc'
+};
 
 // ─── SCORING ENGINE ────────────────────────────────────────────────────────────
 // Each function returns { score: 0-100, reasons: string[] }
@@ -898,12 +879,12 @@ app.get('/api/parlay', async (req, res) => {
         const homePitcherERA = pitcherERAMap[homePitcher.id] || 4.50;
         const awayPitcherERA = pitcherERAMap[awayPitcher.id] || 4.50;
 
-        // VSIN YRFI lookup — match by team mascot name
-        const vsinYRFIEntry = Object.entries(vsinYRFI).find(([k]) =>
-          k.includes(homeTeam?.name?.split(' ').pop() || '') ||
-          k.includes(awayTeam?.name?.split(' ').pop() || '')
-        );
-        const vsinNRFIProb = vsinYRFIEntry ? (100 - (vsinYRFIEntry[1].modelProb || 50)) : 0;
+        // BallparkPal YRFI lookup — keyed by lowercase team abbr
+        const awayAbbrStr = awayTeam?.abbreviation || '';
+        const homeBPP = MLB_TO_BPP[homeAbbr] || homeAbbr.toLowerCase();
+        const awayBPP = MLB_TO_BPP[awayAbbrStr] || awayAbbrStr.toLowerCase();
+        const vsinYRFIEntry = vsinYRFI[homeBPP] || vsinYRFI[awayBPP];
+        const vsinNRFIProb = vsinYRFIEntry ? vsinYRFIEntry.nrfiProb : 0;
 
         const nrfiData = {
           homePitcher1stERA: homePitcherERA,
@@ -934,7 +915,7 @@ app.get('/api/parlay', async (req, res) => {
             reasons: nrfiResult.reasons,
             gameId: gameId.toString(),
             gameTotal,
-            vsinProjection: vsinYRFIEntry ? `YRFI ${vsinYRFIEntry[1].modelProb}%` : null
+            vsinProjection: vsinYRFIEntry ? `YRFI ${vsinYRFIEntry.modelProb}%` : null
           });
         }
       }
