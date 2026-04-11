@@ -8,7 +8,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ─── ENV VARIABLES (set in Railway dashboard) ───────────────────────────────
-const ODDS_API_KEY = process.env.ODDS_API_KEY || '';
+const ODDS_API_KEY = process.env.ODDS_API_KEY || '';      // legacy (unused)
+const SGO_API_KEY  = process.env.SPORTSGAMEODDS_API_KEY || '';
 const VSIN_COOKIE  = process.env.VSIN_COOKIE  || '';
 
 app.use(express.json());
@@ -115,36 +116,30 @@ const TEAM_LOCATIONS = {
 // ─── DATA FETCHERS ────────────────────────────────────────────────────────────
 
 // 1. THE ODDS API — today's MLB games + game totals
+// SportsGameOdds — single call returns all MLB game totals for today.
+// We only request the game total market (points-all-game-ou-over) to stay
+// well within the 2500/month free tier limit.
 async function fetchOddsData() {
   return cachedFetch('odds_games', async () => {
     try {
-      const url = `https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/?apiKey=${ODDS_API_KEY}&regions=us&markets=totals&oddsFormat=american`;
-      const res = await fetch(url);
-      const games = await res.json();
-      if (!Array.isArray(games)) {
-        console.log('Odds API returned non-array:', JSON.stringify(games).slice(0, 200));
+      if (!SGO_API_KEY) {
+        console.log('SportsGameOdds: SPORTSGAMEODDS_API_KEY not set');
         return [];
       }
-      return games;
+      const url = `https://api.sportsgameodds.com/v2/events?apiKey=${SGO_API_KEY}&leagueID=MLB&oddsAvailable=true&oddIDs=points-all-game-ou-over`;
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+      });
+      const json = await res.json();
+      if (!json.success || !Array.isArray(json.data)) {
+        console.log('SportsGameOdds error:', JSON.stringify(json).slice(0, 200));
+        return [];
+      }
+      console.log(`SportsGameOdds: loaded ${json.data.length} events`);
+      return json.data;
     } catch (e) {
-      console.error('Odds API error:', e.message);
+      console.error('SportsGameOdds error:', e.message);
       return [];
-    }
-  });
-}
-
-// Fetch player props for a specific Odds API event
-// market examples: 'pitcher_strikeouts', 'batter_total_bases', 'batter_hits_runs_rbis'
-async function fetchGameProps(eventId, market) {
-  return cachedFetch(`props_${eventId}_${market}`, async () => {
-    try {
-      const url = `https://api.the-odds-api.com/v4/sports/baseball_mlb/events/${eventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${market}&oddsFormat=american`;
-      const res = await fetch(url);
-      const data = await res.json();
-      return data;
-    } catch (e) {
-      console.error(`Props fetch error (${market}):`, e.message);
-      return null;
     }
   });
 }
@@ -620,28 +615,6 @@ function extractPropLines(propsData) {
   return lines;
 }
 
-// ─── PROBE ENDPOINT (temporary) — shows raw SportsGameOdds response ──────────
-app.get('/api/sgo-probe', async (req, res) => {
-  try {
-    const SGO_KEY = process.env.SPORTSGAMEODDS_API_KEY || '';
-    if (!SGO_KEY) return res.json({ error: 'SPORTSGAMEODDS_API_KEY not set' });
-
-    // 1. Basic event list — see top-level structure
-    const eventsUrl = `https://api.sportsgameodds.com/v2/events?apiKey=${SGO_KEY}&leagueID=MLB&oddsAvailable=true&limit=2`;
-    const eventsRes = await fetch(eventsUrl);
-    const eventsData = await eventsRes.json();
-
-    // 2. Try fetching with totals oddID
-    const totalsUrl = `https://api.sportsgameodds.com/v2/events?apiKey=${SGO_KEY}&leagueID=MLB&oddsAvailable=true&limit=2&oddIDs=total_runs-game-ou-over`;
-    const totalsRes = await fetch(totalsUrl);
-    const totalsData = await totalsRes.json();
-
-    res.json({ eventsData, totalsData });
-  } catch (e) {
-    res.json({ error: e.message });
-  }
-});
-
 // ─── MAIN API ENDPOINT ────────────────────────────────────────────────────────
 app.get('/api/parlay', async (req, res) => {
   try {
@@ -673,13 +646,16 @@ app.get('/api/parlay', async (req, res) => {
       }
     });
 
-    // Match MLB games to Odds API events by team mascot name
-    const oddsGameMap = {}; // mlbGamePk -> oddsGame
+    // Match MLB games to SportsGameOdds events by team name
+    // SGO uses g.teams.home.names.long = "Chicago Cubs"; MLB Stats uses team.name = "Chicago Cubs"
+    const oddsGameMap = {}; // mlbGamePk -> SGO event
     for (const game of mlbGames) {
-      const homeName = game.teams?.home?.team?.name?.split(' ').pop() || '';
-      const oddsMatch = oddsGames.find(g =>
-        g.home_team?.includes(homeName)
-      );
+      const homeTeamName = game.teams?.home?.team?.name || '';
+      const homeMascot  = homeTeamName.split(' ').pop();
+      const oddsMatch = oddsGames.find(g => {
+        const sgoHome = g.teams?.home?.names?.long || '';
+        return sgoHome === homeTeamName || (homeMascot && sgoHome.endsWith(homeMascot));
+      });
       if (oddsMatch) oddsGameMap[game.gamePk] = oddsMatch;
     }
 
@@ -748,39 +724,11 @@ app.get('/api/parlay', async (req, res) => {
 
     console.log(`Phase 3-4 done: ${pitcherIdList.length} pitchers, ${batterIdList.length} batters`);
 
-    // ── PHASE 5: Fetch prop lines from Odds API per game ────────────────────
-    // Gets real posted lines (K overs, TB overs, H+R+RBI overs) from sportsbooks.
-    // These calls use your Odds API credits — cached for 15 min to be efficient.
-    const propPromises = [];
-    for (const game of mlbGames) {
-      const oddsMatch = oddsGameMap[game.gamePk];
-      if (!oddsMatch) continue;
-      propPromises.push(
-        fetchGameProps(oddsMatch.id, 'pitcher_strikeouts')
-          .then(data => ({ gamePk: game.gamePk, market: 'pitcher_strikeouts', data })),
-        fetchGameProps(oddsMatch.id, 'batter_total_bases')
-          .then(data => ({ gamePk: game.gamePk, market: 'batter_total_bases', data })),
-        fetchGameProps(oddsMatch.id, 'batter_hits_runs_rbis')
-          .then(data => ({ gamePk: game.gamePk, market: 'batter_hits_runs_rbis', data }))
-      );
-    }
-    const propResults = await Promise.all(propPromises);
-
-    // Organize: { gamePk: { kLines: {...}, tbLines: {...}, hrbiLines: {...} } }
+    // ── PHASE 5: Prop lines ──────────────────────────────────────────────────
+    // K lines come from BallparkPal (vsinKData.projLine) — no extra API calls needed.
+    // TB / H+R+RBI lines fall back to stat-based estimates in the scoring engine.
     const propLinesMap = {};
-    for (const result of propResults) {
-      if (!propLinesMap[result.gamePk]) propLinesMap[result.gamePk] = {};
-      const lines = extractPropLines(result.data);
-      if (result.market === 'pitcher_strikeouts') {
-        propLinesMap[result.gamePk].kLines = { ...(propLinesMap[result.gamePk].kLines || {}), ...lines };
-      } else if (result.market === 'batter_total_bases') {
-        propLinesMap[result.gamePk].tbLines = { ...(propLinesMap[result.gamePk].tbLines || {}), ...lines };
-      } else if (result.market === 'batter_hits_runs_rbis') {
-        propLinesMap[result.gamePk].hrbiLines = { ...(propLinesMap[result.gamePk].hrbiLines || {}), ...lines };
-      }
-    }
-
-    console.log(`Phase 5 done: prop lines fetched for ${Object.keys(propLinesMap).length} games`);
+    console.log('Phase 5 done: using BallparkPal K lines, stat-based TB/HRBI estimates');
 
     // ── PHASE 6: Score all props ────────────────────────────────────────────
     const allProps = [];
@@ -800,10 +748,10 @@ app.get('/api/parlay', async (req, res) => {
       const windIn  = !isDome && isWindBlowingIn(weather.windDir);
       const parkKFactor = PARK_K_FACTORS[loc.park] || 1.0;
 
-      // Game total from Odds API
+      // Game total from SportsGameOdds (points-all-game-ou-over → bookOverUnder)
       const oddsMatch = oddsGameMap[gameId];
-      const gameTotal = oddsMatch?.bookmakers?.[0]?.markets?.find(m => m.key === 'totals')
-        ?.outcomes?.find(o => o.name === 'Over')?.point || 8.5;
+      const sgoTotal = oddsMatch?.odds?.['points-all-game-ou-over'];
+      const gameTotal = parseFloat(sgoTotal?.bookOverUnder ?? sgoTotal?.overUnder ?? 0) || 8.5;
 
       // Prop lines for this game from Odds API
       const gameProps = propLinesMap[gameId] || {};
