@@ -620,6 +620,28 @@ function extractPropLines(propsData) {
   return lines;
 }
 
+// ─── PROBE ENDPOINT (temporary) — shows raw SportsGameOdds response ──────────
+app.get('/api/sgo-probe', async (req, res) => {
+  try {
+    const SGO_KEY = process.env.SPORTSGAMEODDS_API_KEY || '';
+    if (!SGO_KEY) return res.json({ error: 'SPORTSGAMEODDS_API_KEY not set' });
+
+    // 1. Basic event list — see top-level structure
+    const eventsUrl = `https://api.sportsgameodds.com/v2/events?apiKey=${SGO_KEY}&leagueID=MLB&oddsAvailable=true&limit=2`;
+    const eventsRes = await fetch(eventsUrl);
+    const eventsData = await eventsRes.json();
+
+    // 2. Try fetching with totals oddID
+    const totalsUrl = `https://api.sportsgameodds.com/v2/events?apiKey=${SGO_KEY}&leagueID=MLB&oddsAvailable=true&limit=2&oddIDs=total_runs-game-ou-over`;
+    const totalsRes = await fetch(totalsUrl);
+    const totalsData = await totalsRes.json();
+
+    res.json({ eventsData, totalsData });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
+
 // ─── MAIN API ENDPOINT ────────────────────────────────────────────────────────
 app.get('/api/parlay', async (req, res) => {
   try {
