@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MLB Parlay Builder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Barlow+Condensed:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #0a0c0f;
+    --surface:   #111318;
+    --card:      #161b22;
+    --border:    #1e2530;
+    --orange:    #f97316;
+    --orange-dim:#7c3a10;
+    --green:     #22c55e;
+    --red:       #ef4444;
+    --yellow:    #eab308;
+    --blue:      #3b82f6;
+    --text:      #e2e8f0;
+    --muted:     #64748b;
+    --subtle:    #1e2530;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── HEADER ─────────────────────────────────────────── */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+  }
+  .logo span { color: var(--orange); }
+
+  .header-date {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.5px;
+  }
+
+  .refresh-btn {
+    background: var(--orange);
+    color: #000;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: opacity 0.2s;
+  }
+  .refresh-btn:hover { opacity: 0.85; }
+  .refresh-btn:disabled { opacity: 0.4; cursor: default; }
+
+  /* ── NAV TABS ───────────────────────────────────────── */
+  .nav-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    padding: 0 24px;
+  }
+  .nav-tab {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 12px 16px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+  .nav-tab.active {
+    color: var(--orange);
+    border-bottom-color: var(--orange);
+  }
+
+  /* ── MAIN LAYOUT ────────────────────────────────────── */
+  main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+
+  .section { display: none; }
+  .section.active { display: block; }
+
+  /* ── DATA STATUS BAR ────────────────────────────────── */
+  .status-bar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+  .status-pill {
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .status-pill.ok  { background: #14321f; color: var(--green); border: 1px solid #1a4428; }
+  .status-pill.err { background: #2d1515; color: var(--red);   border: 1px solid #3d1f1f; }
+  .status-pill.off { background: #2a2410; color: var(--yellow); border: 1px solid #3a3218; }
+
+  /* ── PARLAY CARD ────────────────────────────────────── */
+  .parlay-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .parlay-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .parlay-subtitle {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .parlay-legs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .leg-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+  .leg-card:hover { border-color: var(--orange-dim); }
+  .leg-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+  .leg-card.score-high::before  { background: var(--green); }
+  .leg-card.score-med::before   { background: var(--orange); }
+  .leg-card.score-low::before   { background: var(--yellow); }
+
+  .leg-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 10px;
+  }
+
+  .leg-type-badge {
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    padding: 3px 7px;
+    border-radius: 3px;
+    text-transform: uppercase;
+  }
+  .badge-strikeout { background: #1e1a3a; color: #a78bfa; border: 1px solid #2d2850; }
+  .badge-nrfi      { background: #0f2918; color: var(--green); border: 1px solid #1a3d25; }
+  .badge-total     { background: #1a2e0f; color: #86efac; border: 1px solid #243d18; }
+  .badge-hrbi      { background: #1f1a0d; color: var(--yellow); border: 1px solid #322a12; }
+
+  .leg-score {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 32px;
+    font-weight: 800;
+    line-height: 1;
+  }
+  .score-high { color: var(--green); }
+  .score-med  { color: var(--orange); }
+  .score-low  { color: var(--yellow); }
+
+  .leg-player {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.1;
+    margin-bottom: 3px;
+  }
+  .leg-meta {
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .leg-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .leg-direction {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 15px;
+    font-weight: 800;
+    color: var(--orange);
+  }
+  .leg-prop-line {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .vsin-tag {
+    font-size: 9px;
+    background: #1a1f2e;
+    color: #60a5fa;
+    border: 1px solid #1e3050;
+    padding: 2px 5px;
+    border-radius: 2px;
+    font-weight: 700;
+  }
+
+  .leg-reasons {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .reason-tag {
+    font-size: 9px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .reason-tag::before {
+    content: '›';
+    color: var(--orange);
+    font-weight: 700;
+  }
+  .reason-tag.warn { color: var(--yellow); }
+
+  /* ── CONFIDENCE METER ───────────────────────────────── */
+  .confidence-bar-wrap {
+    background: var(--subtle);
+    border-radius: 2px;
+    height: 4px;
+    margin: 8px 0;
+    overflow: hidden;
+  }
+  .confidence-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.8s ease;
+  }
+
+  /* ── LOADING STATE ──────────────────────────────────── */
+  .loading-overlay {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 80px 24px;
+    gap: 16px;
+  }
+  .spinner {
+    width: 36px; height: 36px;
+    border: 3px solid var(--border);
+    border-top-color: var(--orange);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-text {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 1px;
+  }
+
+  /* ── FULL BOARD TABLE ───────────────────────────────── */
+  .board-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+  .board-table thead th {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  .board-table tbody tr {
+    border-bottom: 1px solid var(--subtle);
+    transition: background 0.15s;
+  }
+  .board-table tbody tr:hover { background: var(--card); }
+  .board-table td {
+    padding: 9px 10px;
+    vertical-align: middle;
+  }
+  .board-rank {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 16px;
+    font-weight: 800;
+    color: var(--muted);
+    width: 32px;
+  }
+  .in-parlay {
+    background: var(--card) !important;
+    border-left: 2px solid var(--orange);
+  }
+  .parlay-dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    background: var(--orange);
+    border-radius: 50%;
+    margin-right: 4px;
+  }
+
+  /* ── SEASON TRACKER ─────────────────────────────────── */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .stat-box {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+  }
+  .stat-value {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 36px;
+    font-weight: 800;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .stat-label {
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .results-list { display: flex; flex-direction: column; gap: 8px; }
+  .result-row {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .result-date { font-size: 11px; color: var(--muted); }
+  .result-outcome {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 16px;
+    font-weight: 800;
+  }
+  .result-win  { color: var(--green); }
+  .result-loss { color: var(--red); }
+
+  .log-form {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: flex-end;
+  }
+  .form-group { display: flex; flex-direction: column; gap: 5px; }
+  .form-label { font-size: 10px; color: var(--muted); letter-spacing: 0.5px; text-transform: uppercase; }
+  .form-input, .form-select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    border-radius: 4px;
+    outline: none;
+  }
+  .form-input:focus, .form-select:focus { border-color: var(--orange); }
+  .log-btn {
+    background: var(--orange);
+    color: #000;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+  }
+
+  /* ── NO DATA STATE ──────────────────────────────────── */
+  .empty-state {
+    text-align: center;
+    padding: 60px 24px;
+    color: var(--muted);
+  }
+  .empty-icon { font-size: 48px; margin-bottom: 12px; }
+  .empty-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    color: var(--text);
+  }
+  .empty-sub { font-size: 11px; line-height: 1.6; }
+
+  /* ── DIVIDER ────────────────────────────────────────── */
+  .section-label {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+    margin-top: 28px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* ── MOBILE ─────────────────────────────────────────── */
+  @media (max-width: 640px) {
+    main { padding: 16px; }
+    .parlay-legs { grid-template-columns: 1fr; }
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">⚾ <span>MLB</span>&nbsp;PARLAY BUILDER</div>
+  <div class="header-date" id="headerDate">Loading...</div>
+  <button class="refresh-btn" id="refreshBtn" onclick="loadParlay()">↻ REFRESH</button>
+</header>
+
+<nav class="nav-tabs">
+  <div class="nav-tab active" onclick="switchTab('parlay', this)">TODAY'S CARD</div>
+  <div class="nav-tab" onclick="switchTab('board', this)">FULL BOARD</div>
+  <div class="nav-tab" onclick="switchTab('tracker', this)">SEASON TRACKER</div>
+</nav>
+
+<main>
+
+  <!-- ── TODAY'S CARD ─────────────────────────────────── -->
+  <section id="parlay" class="section active">
+    <div id="parlayContent">
+      <div class="loading-overlay">
+        <div class="spinner"></div>
+        <div class="loading-text">LOADING TODAY'S SLATE...</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── FULL BOARD ────────────────────────────────────── -->
+  <section id="board" class="section">
+    <div id="boardContent">
+      <div class="empty-state">
+        <div class="empty-icon">📋</div>
+        <div class="empty-title">Load Today's Card First</div>
+        <div class="empty-sub">Switch to Today's Card tab and hit Refresh</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── SEASON TRACKER ───────────────────────────────── -->
+  <section id="tracker" class="section">
+    <div id="trackerContent">
+      <div class="loading-overlay">
+        <div class="spinner"></div>
+        <div class="loading-text">LOADING RESULTS...</div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let currentData = null;
+
+// ─── TAB SWITCHING ────────────────────────────────────────────────────────────
+function switchTab(id, el) {
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById(id).classList.add('active');
+  if (id === 'tracker') loadTracker();
+}
+
+// ─── SCORE HELPERS ────────────────────────────────────────────────────────────
+function scoreClass(s) {
+  if (s >= 75) return 'score-high';
+  if (s >= 60) return 'score-med';
+  return 'score-low';
+}
+function cardClass(s) {
+  if (s >= 75) return 'score-high';
+  if (s >= 60) return 'score-med';
+  return 'score-low';
+}
+function badgeClass(type) {
+  if (type === 'STRIKEOUTS')  return 'badge-strikeout';
+  if (type === 'NRFI')        return 'badge-nrfi';
+  if (type === 'TOTAL BASES') return 'badge-total';
+  return 'badge-hrbi';
+}
+function barColor(s) {
+  if (s >= 75) return 'var(--green)';
+  if (s >= 60) return 'var(--orange)';
+  return 'var(--yellow)';
+}
+
+// ─── RENDER PARLAY CARD ───────────────────────────────────────────────────────
+function renderParlay(data) {
+  const { parlayLegs, dataStatus, gamesProcessed, date } = data;
+  document.getElementById('headerDate').textContent = date;
+
+  // Status pills
+  const statusHTML = `
+    <div class="status-bar">
+      <div class="status-pill ${dataStatus.oddsApi ? 'ok' : 'err'}">
+        ${dataStatus.oddsApi ? '✓' : '✗'} ODDS API
+      </div>
+      <div class="status-pill ${dataStatus.mlbStats ? 'ok' : 'err'}">
+        ${dataStatus.mlbStats ? '✓' : '✗'} MLB STATS
+      </div>
+      <div class="status-pill ${dataStatus.vsinStrikeouts ? 'ok' : 'off'}">
+        ${dataStatus.vsinStrikeouts ? '✓' : '~'} VSIN K PROJ
+      </div>
+      <div class="status-pill ${dataStatus.vsinYRFI ? 'ok' : 'off'}">
+        ${dataStatus.vsinYRFI ? '✓' : '~'} VSIN YRFI
+      </div>
+      <div class="status-pill ${dataStatus.umpires ? 'ok' : 'off'}">
+        ${dataStatus.umpires ? '✓' : '~'} UMPIRES
+      </div>
+      <div class="status-pill ok">${gamesProcessed} GAMES PROCESSED</div>
+    </div>
+  `;
+
+  if (!parlayLegs || parlayLegs.length === 0) {
+    document.getElementById('parlayContent').innerHTML = statusHTML + `
+      <div class="empty-state">
+        <div class="empty-icon">⚾</div>
+        <div class="empty-title">No Plays Found Today</div>
+        <div class="empty-sub">Not enough qualifying props today.<br>
+        Check back after lineups are posted (~2hrs before first pitch).</div>
+      </div>
+    `;
+    return;
+  }
+
+  // Leg cards
+  const legsHTML = parlayLegs.map((leg, i) => {
+    const sc = scoreClass(leg.score);
+    const reasonsHTML = leg.reasons.slice(0, 4).map(r => {
+      const isWarn = r.includes('⚠️');
+      return `<div class="reason-tag ${isWarn ? 'warn' : ''}">${r.replace('⚠️','').trim()}</div>`;
+    }).join('');
+
+    const vsinTagHTML = leg.vsinProjection
+      ? `<span class="vsin-tag">VSIN: ${leg.vsinProjection}</span>`
+      : '';
+
+    return `
+      <div class="leg-card ${cardClass(leg.score)}">
+        <div class="leg-top">
+          <div>
+            <div class="leg-type-badge ${badgeClass(leg.type)}">${leg.emoji} ${leg.type}</div>
+          </div>
+          <div class="leg-score ${sc}">${leg.score}</div>
+        </div>
+        <div class="leg-player">${leg.player}</div>
+        <div class="leg-meta">${leg.team}${leg.opponent && leg.type !== 'NRFI' ? ' vs ' + leg.opponent : ''}</div>
+        <div class="leg-line">
+          <span class="leg-direction">${leg.direction}</span>
+          <span class="leg-prop-line">${leg.line}</span>
+          ${vsinTagHTML}
+        </div>
+        <div class="confidence-bar-wrap">
+          <div class="confidence-bar-fill" style="width:${leg.score}%; background:${barColor(leg.score)};"></div>
+        </div>
+        <div class="leg-reasons">${reasonsHTML}</div>
+      </div>
+    `;
+  }).join('');
+
+  // Composite parlay confidence
+  const avgScore = parlayLegs.reduce((s, l) => s + l.score, 0) / parlayLegs.length;
+  const parlayConf = (Math.pow(avgScore / 100, parlayLegs.length) * 100).toFixed(0);
+
+  document.getElementById('parlayContent').innerHTML = statusHTML + `
+    <div class="parlay-header">
+      <div class="parlay-title">Today's <span style="color:var(--orange)">${parlayLegs.length}-Leg</span> Parlay</div>
+      <div class="parlay-subtitle">Composite conf: ~${parlayConf}% · Top plays by composite score</div>
+    </div>
+    <div class="parlay-legs">${legsHTML}</div>
+    <div class="section-label">COMPOSITE CONFIDENCE</div>
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="font-size:11px;color:var(--muted)">AVG LEG SCORE</span>
+        <span style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:800;color:var(--orange)">${avgScore.toFixed(0)}/100</span>
+      </div>
+      <div class="confidence-bar-wrap" style="height:8px;">
+        <div class="confidence-bar-fill" style="width:${avgScore}%; background:${barColor(avgScore)};"></div>
+      </div>
+      <div style="font-size:10px;color:var(--muted);margin-top:8px;line-height:1.6;">
+        Score ≥75 = strong play · Score 60-74 = solid play · Score 45-59 = marginal<br>
+        Any leg below 55 will be excluded unless the full slate is thin.
+      </div>
+    </div>
+  `;
+}
+
+// ─── RENDER FULL BOARD ────────────────────────────────────────────────────────
+function renderBoard(data) {
+  const { fullBoard, parlayLegs } = data;
+  const parlayGameIds = new Set((parlayLegs || []).map(l => l.gameId));
+
+  if (!fullBoard || fullBoard.length === 0) {
+    document.getElementById('boardContent').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">📋</div>
+        <div class="empty-title">No Board Data</div>
+        <div class="empty-sub">Go to Today's Card and refresh first.</div>
+      </div>`;
+    return;
+  }
+
+  const rows = fullBoard.map((prop, i) => {
+    const inParlay = parlayLegs?.some(l => l.player === prop.player && l.type === prop.type);
+    return `
+      <tr class="${inParlay ? 'in-parlay' : ''}">
+        <td class="board-rank">${inParlay ? '🟠' : i + 1}</td>
+        <td>
+          ${inParlay ? '<span class="parlay-dot"></span>' : ''}
+          <span class="leg-type-badge ${badgeClass(prop.type)}">${prop.emoji} ${prop.type}</span>
+        </td>
+        <td>
+          <div style="font-weight:700;font-size:12px">${prop.player}</div>
+          <div style="font-size:10px;color:var(--muted)">${prop.team}</div>
+        </td>
+        <td style="color:var(--orange);font-weight:700">${prop.direction} ${prop.line}</td>
+        <td>
+          <span class="leg-score ${scoreClass(prop.score)}" style="font-size:16px">${prop.score}</span>
+        </td>
+        <td style="max-width:240px">
+          <div style="font-size:10px;color:var(--muted);line-height:1.5">
+            ${prop.reasons.slice(0,2).join(' · ')}
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  document.getElementById('boardContent').innerHTML = `
+    <div class="parlay-header">
+      <div class="parlay-title">Full Rankings Board</div>
+      <div class="parlay-subtitle">🟠 = selected for parlay · All qualifying plays today</div>
+    </div>
+    <table class="board-table">
+      <thead>
+        <tr>
+          <th>#</th><th>Type</th><th>Player</th><th>Bet</th><th>Score</th><th>Key Reasons</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+// ─── TRACKER ─────────────────────────────────────────────────────────────────
+async function loadTracker() {
+  document.getElementById('trackerContent').innerHTML = `
+    <div class="loading-overlay"><div class="spinner"></div><div class="loading-text">LOADING RESULTS...</div></div>`;
+
+  let results = [];
+  try {
+    const res = await fetch('/api/results');
+    const data = await res.json();
+    results = data.results || [];
+  } catch (e) { results = []; }
+
+  const wins   = results.filter(r => r.outcome === 'win').length;
+  const losses = results.filter(r => r.outcome === 'loss').length;
+  const total  = wins + losses;
+  const pct    = total > 0 ? ((wins / total) * 100).toFixed(1) : '—';
+  const streak = calcStreak(results);
+
+  const resultRows = results.slice().reverse().map(r => `
+    <div class="result-row">
+      <div>
+        <div class="result-date">${r.date || 'Unknown date'}</div>
+        <div style="font-size:10px;color:var(--muted)">${r.legs || ''}</div>
+      </div>
+      <div class="result-outcome ${r.outcome === 'win' ? 'result-win' : 'result-loss'}">
+        ${r.outcome === 'win' ? '✓ WIN' : '✗ LOSS'}
+      </div>
+    </div>
+  `).join('') || '<div style="color:var(--muted);font-size:11px;text-align:center;padding:20px">No results logged yet</div>';
+
+  document.getElementById('trackerContent').innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="stat-value ${wins > losses ? 'score-high' : 'score-med'}">${pct}%</div>
+        <div class="stat-label">Win Rate</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value score-high">${wins}</div>
+        <div class="stat-label">Wins</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value score-low">${losses}</div>
+        <div class="stat-label">Losses</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" style="color:var(--blue)">${total}</div>
+        <div class="stat-label">Total Days</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" style="color:var(--orange)">${streak}</div>
+        <div class="stat-label">Current Streak</div>
+      </div>
+    </div>
+
+    <div class="section-label">LOG TODAY'S RESULT</div>
+    <div class="log-form">
+      <div class="form-group">
+        <label class="form-label">Date</label>
+        <input type="date" class="form-input" id="logDate" value="${new Date().toISOString().split('T')[0]}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Outcome</label>
+        <select class="form-select" id="logOutcome">
+          <option value="win">WIN ✓</option>
+          <option value="loss">LOSS ✗</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Legs (optional)</label>
+        <input type="text" class="form-input" id="logLegs" placeholder="e.g. K over, NRFI, TB over" style="width:220px">
+      </div>
+      <button class="log-btn" onclick="logResult()">LOG RESULT</button>
+    </div>
+
+    <div class="section-label">HISTORY</div>
+    <div class="results-list">${resultRows}</div>
+  `;
+}
+
+function calcStreak(results) {
+  if (!results.length) return '—';
+  const last = results[results.length - 1].outcome;
+  let count = 0;
+  for (let i = results.length - 1; i >= 0; i--) {
+    if (results[i].outcome === last) count++;
+    else break;
+  }
+  return last === 'win' ? `W${count}` : `L${count}`;
+}
+
+async function logResult() {
+  const date    = document.getElementById('logDate').value;
+  const outcome = document.getElementById('logOutcome').value;
+  const legs    = document.getElementById('logLegs').value;
+  try {
+    await fetch('/api/results', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, outcome, legs })
+    });
+    loadTracker();
+  } catch (e) {
+    alert('Error saving result');
+  }
+}
+
+// ─── MAIN LOAD ────────────────────────────────────────────────────────────────
+async function loadParlay() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  btn.textContent = '↻ LOADING...';
+
+  document.getElementById('parlayContent').innerHTML = `
+    <div class="loading-overlay">
+      <div class="spinner"></div>
+      <div class="loading-text">FETCHING PROPS · SCORING PLAYS · BUILDING CARD...</div>
+    </div>`;
+
+  try {
+    const res = await fetch('/api/parlay');
+    if (!res.ok) throw new Error(`Server error ${res.status}`);
+    currentData = await res.json();
+
+    renderParlay(currentData);
+    renderBoard(currentData);
+  } catch (e) {
+    document.getElementById('parlayContent').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">⚠️</div>
+        <div class="empty-title">Failed to Load</div>
+        <div class="empty-sub">${e.message}<br><br>
+        Check your ODDS_API_KEY environment variable in Railway.</div>
+      </div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↻ REFRESH';
+  }
+}
+
+// Auto-load on page open
+loadParlay();
+</script>
+</body>
+</html>
