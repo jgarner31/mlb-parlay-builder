@@ -630,8 +630,8 @@ function renderParlay(data) {
       <div class="status-pill ${dataStatus.whiffRates ? 'ok' : 'off'}">
         ${dataStatus.whiffRates ? '✓' : '~'} WHIFF RATES
       </div>
-      <div class="status-pill ${dataStatus.kLineShop ? 'ok' : 'off'}">
-        ${dataStatus.kLineShop ? '✓' : '~'} K LINE SHOP
+      <div class="status-pill ${(dataStatus.kLineShop || dataStatus.vsinStrikeouts) ? 'ok' : 'off'}">
+        ${(dataStatus.kLineShop || dataStatus.vsinStrikeouts) ? '✓' : '~'} K LINE SHOP
       </div>
       <div class="status-pill ok">${gamesProcessed} GAMES PROCESSED</div>
     </div>
@@ -673,8 +673,8 @@ function renderParlay(data) {
            <span class="best-odds-price">${leg.bestOddsPrice}</span>
          </div>`
       : `<div class="best-odds-row">
-           <span class="best-odds-label">BEST PRICE</span>
-           <span class="best-odds-unavail">Lines post ~2hrs before first pitch</span>
+           <span class="best-odds-label">SHOP</span>
+           <span class="best-odds-unavail">Check DraftKings · FanDuel · BetMGM</span>
          </div>`;
 
     return `
