@@ -627,6 +627,12 @@ function renderParlay(data) {
       <div class="status-pill ${dataStatus.umpires ? 'ok' : 'off'}">
         ${dataStatus.umpires ? '✓' : '~'} UMPIRES
       </div>
+      <div class="status-pill ${dataStatus.whiffRates ? 'ok' : 'off'}">
+        ${dataStatus.whiffRates ? '✓' : '~'} WHIFF RATES
+      </div>
+      <div class="status-pill ${dataStatus.kLineShop ? 'ok' : 'off'}">
+        ${dataStatus.kLineShop ? '✓' : '~'} K LINE SHOP
+      </div>
       <div class="status-pill ok">${gamesProcessed} GAMES PROCESSED</div>
     </div>
   `;

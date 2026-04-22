@@ -407,7 +407,106 @@ async function fetchVSINYRFI() {
   });
 }
 
-// 6. BASEBALL SAVANT — pitcher whiff rate + K% (free, no key needed)
+// 6. THE ODDS API — pitcher strikeout props across all sportsbooks
+// Uses the event-odds endpoint with market=pitcher_strikeouts.
+// Costs 1 credit per game event. We fetch all today's games in parallel.
+// Returns: { "pitcher name lowercase": { line, bestBook, bestPrice, allBooks: [{book, price, line}] } }
+async function fetchStrikeoutOdds(mlbGameEventIds) {
+  if (!ODDS_API_KEY) {
+    console.log('TheOddsAPI: ODDS_API_KEY not set, skipping K line shop');
+    return {};
+  }
+  if (!mlbGameEventIds || mlbGameEventIds.length === 0) return {};
+
+  return cachedFetch('strikeout_odds', async () => {
+    try {
+      // First get today's MLB event IDs from The Odds API
+      const eventsUrl = `https://api.the-odds-api.com/v4/sports/baseball_mlb/events?apiKey=${ODDS_API_KEY}&dateFormat=iso`;
+      const eventsRes = await fetch(eventsUrl);
+      if (!eventsRes.ok) throw new Error(`Events fetch ${eventsRes.status}`);
+      const events = await eventsRes.json();
+
+      if (!Array.isArray(events) || events.length === 0) {
+        console.log('TheOddsAPI: no MLB events found');
+        return {};
+      }
+
+      console.log(`TheOddsAPI: found ${events.length} MLB events, fetching K props...`);
+
+      // Fetch pitcher_strikeouts market for each event in parallel
+      // regions=us covers DraftKings, FanDuel, BetMGM, Caesars, etc.
+      const propResults = await Promise.all(
+        events.map(event =>
+          fetch(`https://api.the-odds-api.com/v4/sports/baseball_mlb/events/${event.id}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=pitcher_strikeouts&oddsFormat=american&dateFormat=iso`)
+            .then(r => r.ok ? r.json() : null)
+            .catch(() => null)
+        )
+      );
+
+      // Build map: pitcher name (lowercase) → { line, bestBook, bestPrice, allBooks }
+      const strikeoutOddsMap = {};
+
+      for (const eventData of propResults) {
+        if (!eventData?.bookmakers) continue;
+
+        for (const bookmaker of eventData.bookmakers) {
+          const bookName = bookmaker.title || bookmaker.key;
+          const market = bookmaker.markets?.find(m => m.key === 'pitcher_strikeouts');
+          if (!market?.outcomes) continue;
+
+          // Each outcome: { name: "Over"/"Under", description: "Zack Wheeler", price: -115, point: 6.5 }
+          const overs = market.outcomes.filter(o => o.name === 'Over');
+
+          for (const outcome of overs) {
+            const pitcherName = (outcome.description || '').toLowerCase().trim();
+            const line  = outcome.point;
+            const price = outcome.price; // American odds, e.g. -115 or +105
+
+            if (!pitcherName || !line) continue;
+
+            if (!strikeoutOddsMap[pitcherName]) {
+              strikeoutOddsMap[pitcherName] = {
+                line,
+                bestBook: bookName,
+                bestPrice: price,
+                allBooks: []
+              };
+            }
+
+            strikeoutOddsMap[pitcherName].allBooks.push({ book: bookName, price, line });
+
+            // Track the best (highest / least negative) price across all books
+            // e.g. -108 is better than -115; +110 is better than -108
+            if (price > strikeoutOddsMap[pitcherName].bestPrice) {
+              strikeoutOddsMap[pitcherName].bestPrice = price;
+              strikeoutOddsMap[pitcherName].bestBook  = bookName;
+            }
+
+            // Use the most common line as the canonical line
+            // (books sometimes shade 0.5 either way — take the most available)
+            const lineCounts = {};
+            strikeoutOddsMap[pitcherName].allBooks.forEach(b => {
+              lineCounts[b.line] = (lineCounts[b.line] || 0) + 1;
+            });
+            strikeoutOddsMap[pitcherName].line = parseFloat(
+              Object.entries(lineCounts).sort((a, b) => b[1] - a[1])[0][0]
+            );
+          }
+        }
+      }
+
+      const count = Object.keys(strikeoutOddsMap).length;
+      console.log(`TheOddsAPI: K props loaded for ${count} pitchers`);
+      return strikeoutOddsMap;
+
+    } catch (e) {
+      console.log('TheOddsAPI strikeout odds failed (non-fatal):', e.message);
+      return {};
+    }
+  });
+}
+
+// 7. BASEBALL SAVANT — pitcher whiff rate + K% (free, no key needed)
 // whiff_percent = % of swings that result in a miss — the true "stuff" signal
 // k_percent = season strikeout rate — more reliable than recent K/9 alone
 // Keyed by "first last" lowercase AND by "id_PLAYERID" for direct lookup
@@ -742,14 +841,15 @@ app.get('/api/parlay', async (req, res) => {
     // These 6 calls all go out at the same time (Promise.all), so instead of
     // waiting for each one to finish before starting the next, they all run
     // simultaneously. This is the single biggest speed improvement.
-    const [mlbGames, oddsGames, teamStats, vsinKData, vsinYRFI, umpireData, whiffRates] = await Promise.all([
+    const [mlbGames, oddsGames, teamStats, vsinKData, vsinYRFI, umpireData, whiffRates, strikeoutOdds] = await Promise.all([
       fetchMLBSchedule(),
       fetchOddsData(),
       fetchTeamStats(),
       fetchVSINStrikeouts(),
       fetchVSINYRFI(),
       fetchUmpireData(),
-      fetchWhiffRates()
+      fetchWhiffRates(),
+      fetchStrikeoutOdds()
     ]);
 
     console.log(`Phase 1 done: ${mlbGames.length} games, ${oddsGames.length} odds events`);
@@ -908,7 +1008,8 @@ app.get('/api/parlay', async (req, res) => {
         const restDays = calculateRestDays(gameLogs);
 
         // Real posted K line: prefer Odds API > VSIN > K/9-based estimate
-        const oddsKLine = gameProps.kLines?.[pitcherName];
+        const oddsApiData = strikeoutOdds[pitcherName] || {};
+        const oddsKLine = oddsApiData.line;
         const postedLine = oddsKLine || vsinData.projLine || (k9 > 0 ? Math.floor(k9 * 5.5 / 9) + 0.5 : 5.5);
 
         // Recent over rate (how often pitcher hit the K over in last 3 starts)
@@ -974,7 +1075,12 @@ app.get('/api/parlay', async (req, res) => {
             gameTotal,
             whiffPct: savantData.whiffPct || null,
             avgIP: avgInningsPitched,
-            vsinProjection: vsinData.projection ? `${vsinData.projection} Ks` : null
+            vsinProjection: vsinData.projection ? `${vsinData.projection} Ks` : null,
+            bestOddsBook:  oddsApiData.bestBook  || null,
+            bestOddsPrice: oddsApiData.bestPrice != null
+              ? (oddsApiData.bestPrice > 0 ? `+${oddsApiData.bestPrice}` : `${oddsApiData.bestPrice}`)
+              : null,
+            allBooks: oddsApiData.allBooks || []
           });
         }
       }
@@ -1190,44 +1296,9 @@ app.get('/api/parlay', async (req, res) => {
       }
     }
 
-    // ── BEST ODDS: Find the best available price for each of the top 3 legs ──
-    // For each parlay leg, scan all sportsbooks in the SGO data and find which
-    // book has the best (highest) payout odds. A -108 vs -115 difference across
-    // a full season is worth hundreds of dollars on the same bets.
-    for (const leg of parlayLegs) {
-      const oddsMatch = Object.values(oddsGameMap).find(g => {
-        const gamePk = mlbGames.find(m => oddsGameMap[m.gamePk] === g)?.gamePk;
-        return gamePk?.toString() === leg.gameId;
-      });
-
-      if (!oddsMatch) continue;
-
-      // Collect all available odds across books for this game's props
-      const bestOdds = [];
-      const allOddsFields = oddsMatch.odds || {};
-
-      // For K props: look for strikeout-related markets
-      // For now surface the game total best line as a proxy — full prop line
-      // shopping requires per-player prop market keys from SGO
-      const gameOddsEntries = Object.entries(allOddsFields);
-      if (gameOddsEntries.length > 0) {
-        let bestBook = null;
-        let bestPrice = -9999;
-        for (const [marketKey, oddsObj] of gameOddsEntries) {
-          if (!marketKey.includes('ou')) continue; // only totals markets for now
-          const books = Array.isArray(oddsObj) ? oddsObj : [oddsObj];
-          for (const book of books) {
-            const price = parseInt(book.price || book.overOdds || -115);
-            if (price > bestPrice) {
-              bestPrice = price;
-              bestBook = book.sportsbook || book.book || 'Best Book';
-            }
-          }
-        }
-        if (bestBook) leg.bestOddsBook = bestBook;
-        if (bestPrice > -9999) leg.bestOddsPrice = bestPrice > 0 ? `+${bestPrice}` : `${bestPrice}`;
-      }
-    }
+    // Best odds are now attached directly to each prop in the scoring phase above.
+    // K props carry bestOddsBook + bestOddsPrice from The Odds API pitcher_strikeouts market.
+    // Batter props (TB, H+R+RBI) will show the "check book" fallback until we add those markets.
 
     // Data source status for the UI pills
     const dataStatus = {
@@ -1236,7 +1307,8 @@ app.get('/api/parlay', async (req, res) => {
       vsinStrikeouts: Object.keys(vsinKData).length > 0,
       vsinYRFI: Object.keys(vsinYRFI).length > 0,
       umpires: Object.keys(umpireData).length > 0,
-      whiffRates: Object.keys(whiffRates).length > 0
+      whiffRates: Object.keys(whiffRates).length > 0,
+      kLineShop: Object.keys(strikeoutOdds).length > 0
     };
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
