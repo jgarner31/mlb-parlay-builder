@@ -248,26 +248,71 @@ async function fetchUmpireData() {
   return cachedFetch('umpires', async () => {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const url = `https://umpscorecards.com/api/umpires/games?date=${today}`;
-      const res = await fetch(url, {
+
+      // Step 1: Get today's HP ump assignments from MLB Stats API
+      const scheduleUrl = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${today}&hydrate=officials`;
+      const scheduleRes = await fetch(scheduleUrl);
+      const scheduleData = await scheduleRes.json();
+
+      const gameUmpMap = {};
+      for (const dateEntry of (scheduleData.dates || [])) {
+        for (const game of (dateEntry.games || [])) {
+          const gamePk = game.gamePk;
+          const officials = game.officials || [];
+          const hpUmp = officials.find(o => o.officialType === 'Home Plate');
+          const umpName = hpUmp?.official?.fullName || null;
+          if (gamePk && umpName && umpName !== 'TBD') {
+            gameUmpMap[gamePk] = umpName;
+          }
+        }
+      }
+
+      if (Object.keys(gameUmpMap).length === 0) {
+        console.log('Umpire assignments not yet posted for today');
+        return {};
+      }
+
+      // Step 2: Get all umpires career stats from UmpScorecards
+      const umpsRes = await fetch('https://umpscorecards.com/api/umpires', {
         headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
       });
-      if (!res.ok) return {};
-      const data = await res.json();
-      const umpMap = {};
-      if (Array.isArray(data)) {
-        data.forEach(game => {
-          if (game.venue && game.ump_hp) {
-            umpMap[game.game_id] = {
-              name: game.ump_hp,
-              kRate: game.k_rate_boost || 0
-            };
-          }
-        });
+      const umpsData = await umpsRes.json();
+
+      const umpStatsMap = {};
+      for (const ump of (umpsData.rows || [])) {
+        const name = ump.umpire?.trim();
+        if (name) umpStatsMap[name] = ump;
       }
+
+      // Step 3: Merge — gamePk -> ump name -> ump score
+      const umpMap = {};
+      for (const [gamePk, umpName] of Object.entries(gameUmpMap)) {
+        const stats = umpStatsMap[umpName];
+        const score = stats?.weighted_score ?? 60;
+
+        let tier;
+        if (score >= 110)     tier = 'very_favorable';
+        else if (score >= 80) tier = 'favorable';
+        else if (score >= 60) tier = 'neutral';
+        else if (score >= 40) tier = 'tight';
+        else                  tier = 'very_tight';
+
+        // kRate maps tier to a K boost value compatible with existing scoring logic
+        const kRateMap = { very_favorable: 10, favorable: 6, neutral: 3, tight: -3, very_tight: -7 };
+
+        umpMap[gamePk.toString()] = {
+          name: umpName,
+          score: score,
+          tier: tier,
+          kRate: kRateMap[tier]
+        };
+      }
+
+      console.log(`Umpire data loaded for ${Object.keys(umpMap).length} games`);
       return umpMap;
+
     } catch (e) {
-      console.log('Umpire data unavailable, skipping');
+      console.log('Umpire data unavailable, skipping:', e.message);
       return {};
     }
   });
