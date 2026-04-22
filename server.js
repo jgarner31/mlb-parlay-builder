@@ -407,6 +407,54 @@ async function fetchVSINYRFI() {
   });
 }
 
+// 6. BASEBALL SAVANT — pitcher whiff rate + K% (free, no key needed)
+// whiff_percent = % of swings that result in a miss — the true "stuff" signal
+// k_percent = season strikeout rate — more reliable than recent K/9 alone
+// Keyed by "first last" lowercase AND by "id_PLAYERID" for direct lookup
+async function fetchWhiffRates() {
+  return cachedFetch('whiff_rates', async () => {
+    try {
+      const url = 'https://baseballsavant.mlb.com/leaderboard/custom?year=2026&type=pitcher&filter=&sort=4&sortDir=desc&min=5&selections=p_game,p_formatted_ip,p_strikeout,whiff_percent,k_percent&player_type=pitcher&abs=0&csv=true';
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+
+      const map = {};
+      const lines = text.replace(/^\uFEFF/, '').split('\n').slice(1); // strip BOM, skip header
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        // CSV: "Last, First",playerId,year,games,ip,strikeouts,whiff_pct,k_pct
+        const cols = line.split(',');
+        if (cols.length < 8) continue;
+
+        const rawName  = cols[0].replace(/"/g, '').trim(); // "Warren, Will"
+        const playerId = cols[1]?.trim();
+        const whiffPct = parseFloat(cols[6]) || 0;
+        const kPct     = parseFloat(cols[7]) || 0;
+
+        if (!rawName || !whiffPct) continue;
+
+        // "Warren, Will" → "will warren" to match MLB Stats API fullName
+        const parts = rawName.split(',');
+        const normalizedName = `${parts[1]?.trim()} ${parts[0]?.trim()}`.toLowerCase();
+
+        const entry = { whiffPct, kPct, playerId };
+        map[normalizedName] = entry;
+        if (playerId) map[`id_${playerId}`] = entry; // fallback by numeric ID
+      }
+
+      console.log(`Baseball Savant whiff rates: loaded ${Object.keys(map).length} entries`);
+      return map;
+    } catch (e) {
+      console.log('Baseball Savant whiff rates unavailable:', e.message);
+      return {};
+    }
+  });
+}
+
 // BallparkPal uses short lowercase abbrs; MLB Stats API uses uppercase (sometimes different).
 // This map handles the mismatches; everything else just needs .toLowerCase().
 const MLB_TO_BPP = {
@@ -430,58 +478,82 @@ function scoreStrikeoutProp(data) {
     reasons.push(`VSIN edge +${data.vsinValuePct.toFixed(1)}% value`);
   }
 
-  // 2. Pitcher K/9 rate (up to 20 pts)
-  const k9 = data.pitcherK9 || 0;
-  if (k9 >= 11)      { score += 20; reasons.push(`Elite K/9 ${k9.toFixed(1)}`); }
-  else if (k9 >= 10) { score += 16; reasons.push(`Strong K/9 ${k9.toFixed(1)}`); }
-  else if (k9 >= 9)  { score += 12; reasons.push(`Good K/9 ${k9.toFixed(1)}`); }
-  else if (k9 >= 8)  { score += 7;  reasons.push(`Avg K/9 ${k9.toFixed(1)}`); }
-  else if (k9 >= 7)  { score += 3; }
+  // 2. Whiff Rate — the TRUE stuff signal (up to 20 pts)
+  // Whiff rate is what sharp bettors use; K/9 is a lagging result metric.
+  // A pitcher with 35%+ whiff rate is genuinely missing bats, not just
+  // getting lucky with weak lineups. Books are slower to adjust to this.
+  const whiffPct = data.whiffPct || 0;
+  if (whiffPct >= 35)      { score += 20; reasons.push(`Elite whiff rate ${whiffPct.toFixed(1)}% 🔥`); }
+  else if (whiffPct >= 30) { score += 15; reasons.push(`Strong whiff rate ${whiffPct.toFixed(1)}%`); }
+  else if (whiffPct >= 25) { score += 9;  reasons.push(`Good whiff rate ${whiffPct.toFixed(1)}%`); }
+  else if (whiffPct >= 20) { score += 4; }
+  else if (whiffPct > 0 && whiffPct < 18) { score -= 5; reasons.push(`⚠️ Low whiff rate ${whiffPct.toFixed(1)}%`); }
 
-  // 3. Opposing team K% (up to 15 pts)
+  // 3. Pitcher K/9 rate (up to 12 pts — reduced since whiff rate is more predictive)
+  const k9 = data.pitcherK9 || 0;
+  if (k9 >= 11)      { score += 12; reasons.push(`Elite K/9 ${k9.toFixed(1)}`); }
+  else if (k9 >= 10) { score += 9; reasons.push(`Strong K/9 ${k9.toFixed(1)}`); }
+  else if (k9 >= 9)  { score += 6; reasons.push(`Good K/9 ${k9.toFixed(1)}`); }
+  else if (k9 >= 8)  { score += 3; }
+
+  // 4. Opposing team K% (up to 15 pts)
   const oppKPct = data.opposingTeamKPct || 0;
   if (oppKPct >= 0.27)      { score += 15; reasons.push(`Opp K% ${(oppKPct*100).toFixed(0)}% (top tier)`); }
   else if (oppKPct >= 0.25) { score += 11; reasons.push(`Opp K% ${(oppKPct*100).toFixed(0)}%`); }
   else if (oppKPct >= 0.23) { score += 7; }
   else if (oppKPct >= 0.21) { score += 3; }
 
-  // 4. Line value — projection meaningfully exceeds posted line (up to 10 pts)
+  // 5. Line value — projection meaningfully exceeds posted line (up to 10 pts)
   const projVsLine = (data.vsinProjection || 0) - (data.postedLine || 0);
   if (projVsLine >= 1.5)      { score += 10; reasons.push(`Proj ${data.vsinProjection} vs line ${data.postedLine} (+${projVsLine.toFixed(1)})`); }
   else if (projVsLine >= 1.0) { score += 7; reasons.push(`Proj ${data.vsinProjection} over line by 1.0`); }
   else if (projVsLine >= 0.5) { score += 4; }
 
-  // 5. Umpire strike zone (up to 10 pts)
-  if (data.umpKRateBoost >= 0.03)       { score += 10; reasons.push(`Ump ${data.umpName} calls wide zone`); }
-  else if (data.umpKRateBoost >= 0.015) { score += 6; }
-  else if (data.umpKRateBoost <= -0.02) { score -= 5; reasons.push(`⚠️ Ump tight zone penalty`); }
+  // 6. Umpire strike zone (up to 10 pts)
+  if (data.umpKRateBoost >= 8)      { score += 10; reasons.push(`Ump ${data.umpName} calls wide zone`); }
+  else if (data.umpKRateBoost >= 5) { score += 6; }
+  else if (data.umpKRateBoost >= 3) { score += 3; }
+  else if (data.umpKRateBoost <= -3) { score -= 5; reasons.push(`⚠️ Ump ${data.umpName} tight zone`); }
 
-  // 6. Park K factor (up to 10 pts)
+  // 7. Park K factor (up to 8 pts)
   const kFactor = data.parkKFactor || 1.0;
-  if (kFactor >= 1.06)      { score += 10; reasons.push(`K-friendly park (${kFactor.toFixed(2)}x)`); }
-  else if (kFactor >= 1.03) { score += 6; }
-  else if (kFactor <= 0.93) { score -= 8; reasons.push(`⚠️ K-suppressing park (Coors)`); }
+  if (kFactor >= 1.06)      { score += 8; reasons.push(`K-friendly park (${kFactor.toFixed(2)}x)`); }
+  else if (kFactor >= 1.03) { score += 5; }
+  else if (kFactor <= 0.93) { score -= 8; reasons.push(`⚠️ K-suppressing park`); }
   else if (kFactor <= 0.96) { score -= 4; }
 
-  // 7. Weather — wind-in helps Ks (up to 10 pts)
+  // 8. Weather — wind-in helps Ks (up to 8 pts)
   if (!data.isDome) {
-    if (data.windIn && data.windSpeed >= 15)      { score += 10; reasons.push(`Wind in ${data.windSpeed}mph ↑Ks`); }
-    else if (data.windIn && data.windSpeed >= 10) { score += 6; reasons.push(`Wind in ${data.windSpeed}mph`); }
-    if (data.tempF <= 55)       { score += 5; reasons.push(`Cold ${data.tempF}°F ↑Ks`); }
-    else if (data.tempF >= 85)  { score -= 3; }
+    if (data.windIn && data.windSpeed >= 15)      { score += 8; reasons.push(`Wind in ${data.windSpeed}mph ↑Ks`); }
+    else if (data.windIn && data.windSpeed >= 10) { score += 5; reasons.push(`Wind in ${data.windSpeed}mph`); }
+    if (data.tempF <= 55)      { score += 5; reasons.push(`Cold ${data.tempF}°F ↑Ks`); }
+    else if (data.tempF >= 85) { score -= 3; }
   }
 
-  // 8. Pitcher rest (up to 5 pts)
+  // 9. Expected innings / pitch count limit — CRITICAL PENALTY
+  // If a pitcher is limited (avg < 5 IP or confirmed pitch limit), the K over
+  // is nearly impossible to hit. This prevents the most common bad K bets.
+  const avgIP = data.avgInningsPitched || 6;
+  const pitchLimit = data.expectedPitchLimit || 999;
+  if (pitchLimit <= 75 || avgIP < 4.0) {
+    score -= 20;
+    reasons.push(`⚠️ PITCH LIMIT — avg ${avgIP.toFixed(1)} IP, likely < 5 inn`);
+  } else if (pitchLimit <= 90 || avgIP < 5.0) {
+    score -= 10;
+    reasons.push(`⚠️ Short leash — avg ${avgIP.toFixed(1)} IP`);
+  }
+
+  // 10. Pitcher rest (up to 5 pts)
   if (data.restDays >= 6)      { score += 5; reasons.push(`Extra rest ${data.restDays}d`); }
   else if (data.restDays <= 3) { score -= 3; reasons.push(`⚠️ Short rest`); }
 
-  // 9. PENALTY — short leash / opener risk
+  // 11. Opener risk flag
   if (data.openerRisk) { score -= 10; reasons.push(`⚠️ Opener risk`); }
 
-  // 10. Recent form — last 3 starts hit the over
+  // 12. Recent form — last 3 starts hit the over
   if (data.recentOverRate >= 0.67) { score += 5; reasons.push(`Hit K over in ${Math.round(data.recentOverRate*3)}/3 recent starts`); }
 
-  // 11. Game total bonus — low-scoring game = more Ks
+  // 13. Game total bonus — low-scoring game = more Ks
   if (data.gameTotal && data.gameTotal <= 7.5) { score += 5; reasons.push(`Low total ${data.gameTotal}`); }
 
   return { score: Math.max(0, Math.min(100, Math.round(score))), reasons };
@@ -670,13 +742,14 @@ app.get('/api/parlay', async (req, res) => {
     // These 6 calls all go out at the same time (Promise.all), so instead of
     // waiting for each one to finish before starting the next, they all run
     // simultaneously. This is the single biggest speed improvement.
-    const [mlbGames, oddsGames, teamStats, vsinKData, vsinYRFI, umpireData] = await Promise.all([
+    const [mlbGames, oddsGames, teamStats, vsinKData, vsinYRFI, umpireData, whiffRates] = await Promise.all([
       fetchMLBSchedule(),
       fetchOddsData(),
       fetchTeamStats(),
       fetchVSINStrikeouts(),
       fetchVSINYRFI(),
-      fetchUmpireData()
+      fetchUmpireData(),
+      fetchWhiffRates()
     ]);
 
     console.log(`Phase 1 done: ${mlbGames.length} games, ${oddsGames.length} odds events`);
@@ -844,9 +917,19 @@ app.get('/api/parlay', async (req, res) => {
           parseInt(g.stat?.strikeOuts || 0) > postedLine
         ).length / Math.max(last3.length, 1);
 
+        // Whiff rate from Baseball Savant — try by name first, then MLB player ID
+        const savantByName = whiffRates[pitcherName] || {};
+        const savantById   = whiffRates[`id_${pitcher.id}`] || {};
+        const savantData   = savantByName.whiffPct ? savantByName : savantById;
+
+        // Expected innings — avg IP over last 5 starts
+        // This is the pitch count / short leash signal
+        const avgInningsPitched = last5.length > 0
+          ? last5.reduce((sum, g) => sum + parseFloat(g.stat?.inningsPitched || 5), 0) / last5.length
+          : 6.0;
+
         // Opener risk: if pitcher averaged under 4.5 IP in recent starts
-        const avgIP = last5.reduce((sum, g) => sum + parseFloat(g.stat?.inningsPitched || 5), 0) / Math.max(last5.length, 1);
-        const openerRisk = avgIP < 4.5;
+        const openerRisk = avgInningsPitched < 4.5;
 
         // Umpire data
         const umpInfo = umpireData[gameId] || {};
@@ -854,6 +937,8 @@ app.get('/api/parlay', async (req, res) => {
 
         const propData = {
           pitcherK9: k9,
+          whiffPct: savantData.whiffPct || 0,
+          avgInningsPitched,
           opposingTeamKPct: teamKPctMap[oppAbbr] || 0.22,
           vsinProjection: vsinData.projection || 0,
           vsinValuePct: vsinData.valuePct || 0,
@@ -887,6 +972,8 @@ app.get('/api/parlay', async (req, res) => {
             reasons,
             gameId: gameId.toString(),
             gameTotal,
+            whiffPct: savantData.whiffPct || null,
+            avgIP: avgInningsPitched,
             vsinProjection: vsinData.projection ? `${vsinData.projection} Ks` : null
           });
         }
@@ -963,6 +1050,13 @@ app.get('/api/parlay', async (req, res) => {
 
       for (const batter of allBatters) {
         if (!batter.id || !batter.fullName) continue;
+
+        // Lineup confirmation check — if lineups aren't posted yet, flag the prop.
+        // homePlayers/awayPlayers only populate after lineups are officially submitted
+        // (usually 60-90 min before first pitch). If we're scoring a batter before
+        // that, the lineup order and even inclusion may change.
+        const lineupConfirmed = (homeLineup.length >= 8 || awayLineup.length >= 8);
+        if (!lineupConfirmed) continue; // skip batter props until lineups are official
 
         const batterName = batter.fullName.toLowerCase().trim();
         const batterLogs = batterStatsMap[batter.id] || [];
@@ -1070,13 +1164,13 @@ app.get('/api/parlay', async (req, res) => {
     // Sort all scored props from highest to lowest
     allProps.sort((a, b) => b.score - a.score);
 
-    // Pick top 4 legs — no two from the same game (avoids correlated legs)
+    // Pick top 3 legs — no two from the same game (avoids correlated legs)
     const usedGames = new Set();
     const parlayLegs = [];
 
     // First pass: only take legs scoring 55+ (strong plays)
     for (const prop of allProps) {
-      if (parlayLegs.length >= 4) break;
+      if (parlayLegs.length >= 3) break;
       if (prop.score < 55) continue;
       if (!usedGames.has(prop.gameId)) {
         parlayLegs.push(prop);
@@ -1084,15 +1178,54 @@ app.get('/api/parlay', async (req, res) => {
       }
     }
 
-    // Second pass: if we couldn't fill 4 legs, relax to 45+ (thin day)
-    if (parlayLegs.length < 4) {
+    // Second pass: if we couldn't fill 3 legs, relax to 45+ (thin day)
+    if (parlayLegs.length < 3) {
       for (const prop of allProps) {
-        if (parlayLegs.length >= 4) break;
+        if (parlayLegs.length >= 3) break;
         if (prop.score < 45) continue;
         if (!usedGames.has(prop.gameId)) {
           parlayLegs.push(prop);
           usedGames.add(prop.gameId);
         }
+      }
+    }
+
+    // ── BEST ODDS: Find the best available price for each of the top 3 legs ──
+    // For each parlay leg, scan all sportsbooks in the SGO data and find which
+    // book has the best (highest) payout odds. A -108 vs -115 difference across
+    // a full season is worth hundreds of dollars on the same bets.
+    for (const leg of parlayLegs) {
+      const oddsMatch = Object.values(oddsGameMap).find(g => {
+        const gamePk = mlbGames.find(m => oddsGameMap[m.gamePk] === g)?.gamePk;
+        return gamePk?.toString() === leg.gameId;
+      });
+
+      if (!oddsMatch) continue;
+
+      // Collect all available odds across books for this game's props
+      const bestOdds = [];
+      const allOddsFields = oddsMatch.odds || {};
+
+      // For K props: look for strikeout-related markets
+      // For now surface the game total best line as a proxy — full prop line
+      // shopping requires per-player prop market keys from SGO
+      const gameOddsEntries = Object.entries(allOddsFields);
+      if (gameOddsEntries.length > 0) {
+        let bestBook = null;
+        let bestPrice = -9999;
+        for (const [marketKey, oddsObj] of gameOddsEntries) {
+          if (!marketKey.includes('ou')) continue; // only totals markets for now
+          const books = Array.isArray(oddsObj) ? oddsObj : [oddsObj];
+          for (const book of books) {
+            const price = parseInt(book.price || book.overOdds || -115);
+            if (price > bestPrice) {
+              bestPrice = price;
+              bestBook = book.sportsbook || book.book || 'Best Book';
+            }
+          }
+        }
+        if (bestBook) leg.bestOddsBook = bestBook;
+        if (bestPrice > -9999) leg.bestOddsPrice = bestPrice > 0 ? `+${bestPrice}` : `${bestPrice}`;
       }
     }
 
@@ -1102,7 +1235,8 @@ app.get('/api/parlay', async (req, res) => {
       mlbStats: mlbGames.length > 0,
       vsinStrikeouts: Object.keys(vsinKData).length > 0,
       vsinYRFI: Object.keys(vsinYRFI).length > 0,
-      umpires: Object.keys(umpireData).length > 0
+      umpires: Object.keys(umpireData).length > 0,
+      whiffRates: Object.keys(whiffRates).length > 0
     };
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
