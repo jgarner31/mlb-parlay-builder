@@ -668,8 +668,8 @@ function renderParlay(data) {
     // Best odds row — shows real book + price when available
     const bestOddsHTML = (leg.bestOddsBook && leg.bestOddsPrice)
       ? `<div class="best-odds-row">
-           <span class="best-odds-label">BEST PRICE</span>
-           <span class="best-odds-book">${leg.bestOddsBook}</span>
+           <span class="best-odds-label">${leg.bestOddsBook === 'Consensus' ? 'CONSENSUS ODDS' : 'BEST PRICE'}</span>
+           <span class="best-odds-book">${leg.bestOddsBook === 'Consensus' ? 'BallparkPal' : leg.bestOddsBook}</span>
            <span class="best-odds-price">${leg.bestOddsPrice}</span>
          </div>`
       : `<div class="best-odds-row">

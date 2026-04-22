@@ -353,7 +353,9 @@ async function fetchVSINStrikeouts() {
         // Value % = edge our model has over market in probability terms
         const valuePct = probability > 0 ? (probability - marketProb) * 100 : 0;
 
-        map[name] = { projection, projLine, probability, valuePct };
+        // Store the raw consensus odds string too — e.g. "+138" or "-115"
+        // This is the consensus price across major books — good enough for line display
+        map[name] = { projection, projLine, probability, valuePct, consensusOdds: oddsStr || null };
       }
       console.log(`BallparkPal K: loaded ${Object.keys(map).length} pitchers`);
       return map;
@@ -986,10 +988,10 @@ app.get('/api/parlay', async (req, res) => {
             whiffPct: savantData.whiffPct || null,
             avgIP: avgInningsPitched,
             vsinProjection: vsinData.projection ? `${vsinData.projection} Ks` : null,
-            bestOddsBook:  oddsApiData.bestBook  || null,
+            bestOddsBook:  oddsApiData.bestBook  || (vsinData.consensusOdds ? 'Consensus' : null),
             bestOddsPrice: oddsApiData.bestPrice != null
               ? (oddsApiData.bestPrice > 0 ? `+${oddsApiData.bestPrice}` : `${oddsApiData.bestPrice}`)
-              : null,
+              : (vsinData.consensusOdds || null),
             allBooks: oddsApiData.allBooks || []
           });
         }
