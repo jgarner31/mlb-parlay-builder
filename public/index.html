@@ -246,6 +246,49 @@
     font-weight: 700;
   }
 
+  .best-odds-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
+    padding: 5px 8px;
+    background: #0f1a10;
+    border: 1px solid #1a3a1a;
+    border-radius: 4px;
+  }
+  .best-odds-label {
+    font-size: 9px;
+    color: var(--muted);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .best-odds-book {
+    font-size: 11px;
+    font-weight: 800;
+    color: #4ade80;
+  }
+  .best-odds-price {
+    font-size: 13px;
+    font-weight: 900;
+    color: #4ade80;
+    margin-left: auto;
+  }
+  .best-odds-unavail {
+    font-size: 9px;
+    color: var(--muted);
+    font-style: italic;
+  }
+  .whiff-tag {
+    font-size: 9px;
+    background: #1f1200;
+    color: #fb923c;
+    border: 1px solid #3a2000;
+    padding: 2px 5px;
+    border-radius: 2px;
+    font-weight: 700;
+  }
+
   .leg-reasons {
     display: flex;
     flex-direction: column;
@@ -612,6 +655,22 @@ function renderParlay(data) {
       ? `<span class="vsin-tag">VSIN: ${leg.vsinProjection}</span>`
       : '';
 
+    const whiffTagHTML = leg.whiffPct
+      ? `<span class="whiff-tag">WHIFF ${leg.whiffPct.toFixed(1)}%</span>`
+      : '';
+
+    // Best odds row — green if we have book data, grey note if not yet available
+    const bestOddsHTML = leg.bestOddsBook
+      ? `<div class="best-odds-row">
+           <span class="best-odds-label">Best Price</span>
+           <span class="best-odds-book">${leg.bestOddsBook}</span>
+           <span class="best-odds-price">${leg.bestOddsPrice || '—'}</span>
+         </div>`
+      : `<div class="best-odds-row">
+           <span class="best-odds-label">Best Price</span>
+           <span class="best-odds-unavail">Check book — prop lines load closer to first pitch</span>
+         </div>`;
+
     return `
       <div class="leg-card ${cardClass(leg.score)}">
         <div class="leg-top">
@@ -626,7 +685,9 @@ function renderParlay(data) {
           <span class="leg-direction">${leg.direction}</span>
           <span class="leg-prop-line">${leg.line}</span>
           ${vsinTagHTML}
+          ${whiffTagHTML}
         </div>
+        ${bestOddsHTML}
         <div class="confidence-bar-wrap">
           <div class="confidence-bar-fill" style="width:${leg.score}%; background:${barColor(leg.score)};"></div>
         </div>
