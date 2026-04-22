@@ -665,16 +665,16 @@ function renderParlay(data) {
       ? `<span class="whiff-tag">WHIFF ${leg.whiffPct.toFixed(1)}%</span>`
       : '';
 
-    // Best odds row — green if we have book data, grey note if not yet available
-    const bestOddsHTML = leg.bestOddsBook
+    // Best odds row — shows real book + price when available
+    const bestOddsHTML = (leg.bestOddsBook && leg.bestOddsPrice)
       ? `<div class="best-odds-row">
-           <span class="best-odds-label">Best Price</span>
+           <span class="best-odds-label">BEST PRICE</span>
            <span class="best-odds-book">${leg.bestOddsBook}</span>
-           <span class="best-odds-price">${leg.bestOddsPrice || '—'}</span>
+           <span class="best-odds-price">${leg.bestOddsPrice}</span>
          </div>`
       : `<div class="best-odds-row">
-           <span class="best-odds-label">Best Price</span>
-           <span class="best-odds-unavail">Check book — prop lines load closer to first pitch</span>
+           <span class="best-odds-label">BEST PRICE</span>
+           <span class="best-odds-unavail">Lines post ~2hrs before first pitch</span>
          </div>`;
 
     return `
