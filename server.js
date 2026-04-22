@@ -407,181 +407,18 @@ async function fetchVSINYRFI() {
   });
 }
 
-// 6. THE ODDS API — pitcher strikeout props across all sportsbooks
-// Uses the event-odds endpoint with market=pitcher_strikeouts.
-// Costs 1 credit per game event. We fetch all today's games in parallel.
-// Returns: { "pitcher name lowercase": { line, bestBook, bestPrice, allBooks: [{book, price, line}] } }
-async function fetchStrikeoutOdds(mlbGameEventIds) {
-  if (!ODDS_API_KEY) {
-    console.log('TheOddsAPI: ODDS_API_KEY not set, skipping K line shop');
-    return {};
-  }
-  if (!mlbGameEventIds || mlbGameEventIds.length === 0) return {};
+// THE ODDS API — pitcher strikeout props (DISABLED — re-enable May 1)
+// To re-enable: remove the early return below
+async function fetchStrikeoutOdds() {
+  return {}; // Odds API credits exhausted — re-enable May 1
+}
 
-  return cachedFetch('strikeout_odds', async () => {
-    try {
-      // First get today's MLB event IDs from The Odds API
-      const eventsUrl = `https://api.the-odds-api.com/v4/sports/baseball_mlb/events?apiKey=${ODDS_API_KEY}&dateFormat=iso`;
-      const eventsRes = await fetch(eventsUrl);
-      if (!eventsRes.ok) throw new Error(`Events fetch ${eventsRes.status}`);
-      const events = await eventsRes.json();
-
-      if (!Array.isArray(events) || events.length === 0) {
-        console.log('TheOddsAPI: no MLB events found');
-        return {};
-      }
-
-      console.log(`TheOddsAPI: found ${events.length} MLB events, fetching K props...`);
-
-      // Fetch pitcher_strikeouts market for each event in parallel
-      // regions=us covers DraftKings, FanDuel, BetMGM, Caesars, etc.
-      const propResults = await Promise.all(
-        events.map(event =>
-          fetch(`https://api.the-odds-api.com/v4/sports/baseball_mlb/events/${event.id}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=pitcher_strikeouts&oddsFormat=american&dateFormat=iso`)
-            .then(r => r.ok ? r.json() : null)
-            .catch(() => null)
-        )
-      );
-
-      // Build map: pitcher name (lowercase) → { line, bestBook, bestPrice, allBooks }
-      const strikeoutOddsMap = {};
-
-      for (const eventData of propResults) {
-        if (!eventData?.bookmakers) continue;
-
-        for (const bookmaker of eventData.bookmakers) {
-          // The Odds API uses bookmaker.title for display name (e.g. "DraftKings")
-          // and bookmaker.key for the slug (e.g. "draftkings")
-          const bookName = bookmaker.title || bookmaker.key || 'Unknown';
-          const market = bookmaker.markets?.find(m => m.key === 'pitcher_strikeouts');
-          if (!market?.outcomes) continue;
-
-          // Log first bookmaker to verify structure in Railway logs
-          if (!strikeoutOddsMap._logged) {
-            console.log(`TheOddsAPI sample book: key=${bookmaker.key} title=${bookmaker.title}`);
-            strikeoutOddsMap._logged = true;
-          }
-
-          // Each outcome: { name: "Over"/"Under", description: "Zack Wheeler", price: -115, point: 6.5 }
-          const overs = market.outcomes.filter(o => o.name === 'Over');
-
-          for (const outcome of overs) {
-            const pitcherName = (outcome.description || '').toLowerCase().trim();
-            const line  = outcome.point;
-            const price = outcome.price; // American odds, e.g. -115 or +105
-
-            if (!pitcherName || !line) continue;
-
-            if (!strikeoutOddsMap[pitcherName]) {
-              strikeoutOddsMap[pitcherName] = {
-                line,
-                bestBook: bookName,
-                bestPrice: price,
-                allBooks: []
-              };
-            }
-
-            strikeoutOddsMap[pitcherName].allBooks.push({ book: bookName, price, line });
-
-            // Track the best (highest / least negative) price across all books
-            // e.g. -108 is better than -115; +110 is better than -108
-            if (price > strikeoutOddsMap[pitcherName].bestPrice) {
-              strikeoutOddsMap[pitcherName].bestPrice = price;
-              strikeoutOddsMap[pitcherName].bestBook  = bookName;
-            }
-
-            // Use the most common line as the canonical line
-            // (books sometimes shade 0.5 either way — take the most available)
-            const lineCounts = {};
-            strikeoutOddsMap[pitcherName].allBooks.forEach(b => {
-              lineCounts[b.line] = (lineCounts[b.line] || 0) + 1;
-            });
-            strikeoutOddsMap[pitcherName].line = parseFloat(
-              Object.entries(lineCounts).sort((a, b) => b[1] - a[1])[0][0]
-            );
-          }
-        }
-      }
-
-      delete strikeoutOddsMap._logged;
-      const count = Object.keys(strikeoutOddsMap).length;
-      console.log(`TheOddsAPI: K props loaded for ${count} pitchers`);
-      return strikeoutOddsMap;
-
-    } catch (e) {
-      console.log('TheOddsAPI strikeout odds failed (non-fatal):', e.message);
-      return {};
-    }
-  });
+// Batter prop odds (TB + H+R+RBI) — also disabled until May 1
+async function fetchBatterPropOdds() {
+  return {}; // Odds API credits exhausted — re-enable May 1
 }
 
 // 7. BASEBALL SAVANT — pitcher whiff rate + K% (free, no key needed)
-// whiff_percent = % of swings that result in a miss — the true "stuff" signal
-// k_percent = season strikeout rate — more reliable than recent K/9 alone
-// Keyed by "first last" lowercase AND by "id_PLAYERID" for direct lookup
-// Fetch batter prop odds (total_bases + hits_runs_rbis) across all books
-// Same pattern as strikeout odds — returns { "player name": { line, bestBook, bestPrice } }
-async function fetchBatterPropOdds() {
-  if (!ODDS_API_KEY) return {};
-
-  return cachedFetch('batter_prop_odds', async () => {
-    try {
-      const eventsUrl = `https://api.the-odds-api.com/v4/sports/baseball_mlb/events?apiKey=${ODDS_API_KEY}&dateFormat=iso`;
-      const eventsRes = await fetch(eventsUrl);
-      if (!eventsRes.ok) throw new Error(`Events ${eventsRes.status}`);
-      const events = await eventsRes.json();
-      if (!Array.isArray(events) || events.length === 0) return {};
-
-      // Fetch both TB and H+R+RBI markets together in one call per event
-      const propResults = await Promise.all(
-        events.map(event =>
-          fetch(`https://api.the-odds-api.com/v4/sports/baseball_mlb/events/${event.id}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=batter_total_bases,batter_hits_runs_rbis&oddsFormat=american&dateFormat=iso`)
-            .then(r => r.ok ? r.json() : null)
-            .catch(() => null)
-        )
-      );
-
-      const batterOddsMap = {};
-
-      for (const eventData of propResults) {
-        if (!eventData?.bookmakers) continue;
-
-        for (const bookmaker of eventData.bookmakers) {
-          const bookName = bookmaker.title || bookmaker.key || 'Unknown';
-
-          for (const market of (bookmaker.markets || [])) {
-            const marketType = market.key; // 'batter_total_bases' or 'batter_hits_runs_rbis'
-            const overs = (market.outcomes || []).filter(o => o.name === 'Over');
-
-            for (const outcome of overs) {
-              const playerName = (outcome.description || '').toLowerCase().trim();
-              const line  = outcome.point;
-              const price = outcome.price;
-              if (!playerName || !line) continue;
-
-              const mapKey = `${marketType}::${playerName}`;
-              if (!batterOddsMap[mapKey]) {
-                batterOddsMap[mapKey] = { line, bestBook: bookName, bestPrice: price, allBooks: [] };
-              }
-              batterOddsMap[mapKey].allBooks.push({ book: bookName, price, line });
-              if (price > batterOddsMap[mapKey].bestPrice) {
-                batterOddsMap[mapKey].bestPrice = price;
-                batterOddsMap[mapKey].bestBook  = bookName;
-              }
-            }
-          }
-        }
-      }
-
-      console.log(`TheOddsAPI: batter props loaded for ${Object.keys(batterOddsMap).length} entries`);
-      return batterOddsMap;
-    } catch (e) {
-      console.log('TheOddsAPI batter props failed (non-fatal):', e.message);
-      return {};
-    }
-  });
-}
-
 async function fetchWhiffRates() {
   return cachedFetch('whiff_rates', async () => {
     try {
